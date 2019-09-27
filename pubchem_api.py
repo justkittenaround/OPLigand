@@ -27,26 +27,28 @@ def progress(count, total, status=''):
 
 c = pcp.Compound.from_cid(5090)
 
-print(c.isomeric_smiles)
-
 c.to_dict(properties=['atoms', 'bonds', 'inchi'])
 
 c_props = get_second_layer_props(c.iupac_name, ['MolecularWeight', 'IUPAC Name', 'Canonical SMILES', 'Boiling Point', 'Vapor Pressure', 'LogP'])
 
-L_dataset = smiles = np.asarray(pd.read_csv('/content/interactions - interactions.tsv', delimiter='\t', usecols=range(12,14), header=(0), encoding='utf-8'))
+filename = '/content/interactions - interactions.tsv'
+def load_raw_data(filename):
+    L_dataset = np.asarray(pd.read_csv(filename, delimiter='\t', usecols=range(12,14), header=(0), encoding='utf-8'))
+    print(L_dataset.shape, L_dataset[0,:])
+    return L_dataset
 
-print(L_dataset.shape, 
-L_dataset[0,:])
+def get_smiles():
+    isomeric_smiles = []
+    t = 0
+    for ligand in L_dataset:
+        s = time.time()
+        c = pcp.Compound.from_cid(ligand[1])
+        smiles = c.isomeric_smiles
+        isomeric_smiles.append(smiles)
+        t += 1
+        progress(t, L_dataset.shape[0], status=('predicting ' + str(t)))
+    return isomeric_smiles
 
-isomeric_smiles = []
-t = 0
-for ligand in L_dataset:
-    s = time.time()
-    c = pcp.Compound.from_cid(ligand[1])
-    smiles = c.isomeric_smiles
-    isomeric_smiles.append(smiles)
-    t += 1
-    progress(t, L_dataset.shape[0], status=('predicting ' + str(t)))
+data = load_raw_data(filename)
 
-
-
+smiles = get_smiles()
