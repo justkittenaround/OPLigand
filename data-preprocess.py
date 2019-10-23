@@ -77,15 +77,15 @@ def convert_hot(data_type):
         hot_ims = []
         for seq in smiles:
             im = np.zeros((256, max_seq_len))
-#             h_ala = 256-im.shape(0)
-#             div = int(h_ala/im.shape(0))
-#             for i in range(div):
-#                 if i == 0:
-#                     im = np.concatenate((im,im), axis=0)
-#                 elif i == 1:
-#                     continue
-#                 else:
-#                     Im = np.concatenate((Im, im). axis=0)
+            h_ala = 256-im.shape(0)
+            div = int(h_ala/im.shape(0))
+            for i in range(div):
+                if i == 0:
+                    im = np.concatenate((im,im), axis=0)
+                elif i == 1:
+                    continue
+                else:
+                    Im = np.concatenate((Im, im). axis=0)
             encoded = np.asarray([ord(char) for char in seq])
             for idx, char in enumerate(encoded):
                 im[char, idx] = 1
