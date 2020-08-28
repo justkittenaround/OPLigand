@@ -94,9 +94,9 @@ class Transformer(nn.Module):
     def forward(self, src, trg):
         src_seq_len, N = src.shape
         trg_seq_len, N = trg.shape
-        src_position = (torch.arange(0, src_seq_len).unsqueeze(1).expand(src_seq_len, N).to(self.device))
+        src_positions = (torch.arange(0, src_seq_len).unsqueeze(1).expand(src_seq_len, N).to(self.device))
         trg_positions = (torch.arange(0, trg_seq_len).unsqueeze(1).expand(trg_seq_len, N).to(self.device))
-        embed_src = self.dropout((self.src_word_embedding(src)+self.src_position_embedding(src_position)))
+        embed_src = self.dropout((self.src_word_embedding(src)+self.src_position_embedding(src_positions)))
         embed_trg = self.dropout((self.trg_word_embedding(trg)+self.trg_position_embedding(trg_positions)))
         src_padding_mask = self.make_src_mask(src)
         trg_mask = self.transformer.generate_square_subsequent_mask(trg_seq_len).to(self.device)
@@ -121,9 +121,6 @@ if LOAD_MODEL:
 
 for epoch in range(N_EPOCHS):
     print(f'Epoch [{epoch} / {N_EPOCHS}]')
-    if SAVE_MODEL and epoch == N_EPOCHS-1:
-        checkpoint = {'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict()}
-        save_checkpoint(checkpoint)
     model.train()
     losses = []
     for batch_idx, batch in enumerate(train_iterator):
@@ -132,38 +129,41 @@ for epoch in range(N_EPOCHS):
         target = batch.trg.to(device)
         #target shape: (maxlen(targ-seqs), BS)
         output = model(inp_data, target)
-        #output shape: (maxlen(trg-seqs), BS, len(targ_vocab))
-    #     output = output[1:].reshape(-1, output.shape[2]) #skip start pad
-    #     #output shape: (len(seq)-1*BS, len(targ_vocab))
-    #     target = target[1:].reshape(-1)
-    #     optimizer.zero_grad()
-    #     loss = criterion(output, target)
-    #     losses.append(loss.detach().item())
-    #     loss.backward()
-    #     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
-    #     optimizer.step()
-    # mean_loss = sum(losses)/len(losses)
-    # schedular.step(mean_loss)
-    # print(f'Loss[{mean_loss.detach().cpu().numpy().sum()}]')
+        # output shape: (maxlen(trg-seqs), BS, len(targ_vocab))
+        output = output[1:].reshape(-1, output.shape[2]) #skip start pad
+        #output shape: (len(seq)-1*BS, len(targ_vocab))
+        target = target[1:].reshape(-1)
+        optimizer.zero_grad()
+        loss = criterion(output, target)
+        losses.append(loss.detach().item())
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
+        optimizer.step()
+    mean_loss = sum(losses)/len(losses)
+    scheduler.step(mean_loss)
+    print(f'Loss[{mean_loss}]')
+    if SAVE_MODEL and epoch == N_EPOCHS-1:
+        checkpoint = {'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict()}
+        save_checkpoint(checkpoint)
 
 
 
+#
+# model.eval()
+#
+# sentence = 'MNNFILLEEQLIKKSQQKRRTSPSNFKVRFFVLTKASLAYFEDRHGKKRTLKGSIELSRIKCVEIVKSDISIPCHYKYPFQVVHDNYLLYVFAPDRESRQRWVLALKEETRNNNSLVPKYHPNFWMDGKWRCCSQLEKLATGCAQYDPTKNASKKPLPPTPEDNRRPLWEPEETVVIALYDYQTNDPQELALRRNEEYCLLDSSEIHWWRVQDRNGHEGYVPSSYLVEKSPNNLETYEWYNKSISRDKAEKLLLDTGKEGAFMVRDSRTAGTYTVSVFTKAVVSENNPCIKHYHIKETNDNPKRYYVAEKYVFDSIPLLINYHQHNGGGLVTRLRYPVCFGRQKAPVTAGLRYGKWVIDPSELTFVQEIGSGQFGLVHLGYWLNKDKVAIKTIREGAMSEEDFIEEAEVMMKLSHPKLVQLYGVCLEQAPICLVFEFMEHGCLSDYLRTQRGLFAAETLLGMCLDVCEGMAYLEEACVIHRDLAARNCLVGENQVIKVSDFGMTRFVLDDQYTSSTGTKFPVKWASPEVFSFSRYSSKSDVWSFGVLMWEVFSEGKIPYENRSNSEVVEDISTGFRLYKPRLASTHVYQIMNHCWKERPEDRPAFSRLLRQLAEIAESGL'
+# actual = 'COc1cc(C)c(cc1C(=O)N1CCN(CC1)C(=O)C)Sc1cnc(s1)NC(=O)c1ccc(cc1)CNC(C(C)'
+#
+# translated = translate_sentence(model, sentence, receptors, ligands, device, max_length = 1000)
+# translated = [chr(i+32) for i in translated]
+# translated = ''.join(translated)
+# print(f'Ligand prediction {translated} \n')
+# print(f'Actual ligand {actual}')
+#
 
-model.eval()
 
-sentence = 'MNNFILLEEQLIKKSQQKRRTSPSNFKVRFFVLTKASLAYFEDRHGKKRTLKGSIELSRIKCVEIVKSDISIPCHYKYPFQVVHDNYLLYVFAPDRESRQRWVLALKEETRNNNSLVPKYHPNFWMDGKWRCCSQLEKLATGCAQYDPTKNASKKPLPPTPEDNRRPLWEPEETVVIALYDYQTNDPQELALRRNEEYCLLDSSEIHWWRVQDRNGHEGYVPSSYLVEKSPNNLETYEWYNKSISRDKAEKLLLDTGKEGAFMVRDSRTAGTYTVSVFTKAVVSENNPCIKHYHIKETNDNPKRYYVAEKYVFDSIPLLINYHQHNGGGLVTRLRYPVCFGRQKAPVTAGLRYGKWVIDPSELTFVQEIGSGQFGLVHLGYWLNKDKVAIKTIREGAMSEEDFIEEAEVMMKLSHPKLVQLYGVCLEQAPICLVFEFMEHGCLSDYLRTQRGLFAAETLLGMCLDVCEGMAYLEEACVIHRDLAARNCLVGENQVIKVSDFGMTRFVLDDQYTSSTGTKFPVKWASPEVFSFSRYSSKSDVWSFGVLMWEVFSEGKIPYENRSNSEVVEDISTGFRLYKPRLASTHVYQIMNHCWKERPEDRPAFSRLLRQLAEIAESGL'
-actual = 'COc1cc(C)c(cc1C(=O)N1CCN(CC1)C(=O)C)Sc1cnc(s1)NC(=O)c1ccc(cc1)CNC(C(C)'
-
-translated = translate_sentence(model, sentence, receptors, ligands, device, max_length = 1000)
-translated = [chr(i+32) for i in translated]
-translated = ''.join(translated)
-print(f'Ligand prediction {translated} \n')
-print(f'Actual ligand {actual}')
-
-
-
-score = bleu(test_data, model, receptors, ligands, device)
-print(f"Bleu score {score*100:.2f}")
+# score = bleu(test_data, model, receptors, ligands, device)
+# print(f"Bleu score {score*100:.2f}")
 
 
 
