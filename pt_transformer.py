@@ -171,12 +171,15 @@ sentence = 'MNNFILLEEQLIKKSQQKRRTSPSNFKVRFFVLTKASLAYFEDRHGKKRTLKGSIELSRIKCVEIVKS
 actual = 'COc1cc(C)c(cc1C(=O)N1CCN(CC1)C(=O)C)Sc1cnc(s1)NC(=O)c1ccc(cc1)CNC(C(C)'
 
 translated = translate_sentence(model, sentence, receptors, ligands, device, max_length = 1000)
+translated = [chr(i+32) for i in translated]
+translated = ''.join(translated)
 print(f'Ligand prediction {translated} \n')
 print(f'Actual ligand {actual}')
 
 
 
-
+score = bleu(test_data[1:100], model, receptors, ligands, device)
+print(f"Bleu score {score*100:.2f}")
 
 
 
