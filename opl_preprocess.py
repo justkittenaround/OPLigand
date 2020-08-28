@@ -22,7 +22,7 @@ with open(DATA_PATH) as f:
 
 #get rid of any pairs without fasta, smile sequences
 dataset = {k: v for k,v in metadata.items() if v != '[]' and k != '[]'}
-print('Number of Receptor Ligand Pairs is', len(dataset), '!')
+# print('Number of Receptor Ligand Pairs is', len(dataset), '!')
 
 #shuffle data
 l = list(dataset.items())
@@ -75,6 +75,13 @@ for k,v in dataset.items():
             ligands.append(v[2:-2:])
             l_lengths.append(len(l))
 
+R_idx = [i for i,r in enumerate(receptors) if len(r) <= 1000]
+receptors = [receptors[i] for i in R_idx]
+ligands = [ligands[i] for i in R_idx]
+L_idx = [i for i,l in enumerate(ligands) if len(l) <= 1000]
+receptors = [receptors[i] for i in L_idx]
+ligands = [ligands[i] for i in L_idx]
+
 if len(receptors) == len(ligands):
     print('Number of Receptor:Ligand Pairs: ', len(receptors), '!')
 else:
@@ -83,12 +90,14 @@ else:
 max_r = max(r_lengths)
 max_l = max(l_lengths)
 
+# print(max_r, max_l, np.average(np.asarray(r_lengths).astype(float)), np.average(np.asarray(l_lengths).astype(float)))
+
 d = {'Receptors': receptors, 'Ligands': ligands}
 
 df = pd.DataFrame(d, columns=['Receptors', 'Ligands'])
 
 train, test = train_test_split(df, test_size=0.3)
-
+#
 train.to_json('train.json', orient='records', lines=True)
 test.to_json('test.json', orient='records', lines=True)
 
