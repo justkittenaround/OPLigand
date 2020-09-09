@@ -3,7 +3,6 @@
 
 import random
 import numpy as np
-import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -12,30 +11,51 @@ from torchtext.data import Field, TabularDataset, BucketIterator
 
 from pt_s2s_utils import translate_sentence, bleu, save_checkpoint, load_checkpoint
 
+
 import warnings
 warnings.filterwarnings("ignore")
 
+import wandb
+wandb.init(project='OPL_transformer')
+wab = wandb.config
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device type: {device} !')
 
-
+MULTI_GPU = False
 LOAD_MODEL = False
-SAVE_MODEL = True
+SAVE_MODEL = False
 MODEL_PATH = 'my_checkpoint.pth.tar'
 DATA_FOLDER = 'opl_data'
 BS = 8
-N_EPOCHS = 1
-LR = 3e-4
+N_EPOCHS = 100
+LR = .0003
 
 embedding_size = 512
 num_heads = 8
 num_encoder_layers = 3
 num_decoder_layers = 3
-dropout = 0.10
-max_len = 1000
+p = 0.2
+max_len = 1001
 forward_expansion = 4
 
+
+if MULTI_GPU == True:
+    BS = BS*torch.cuda.device_count()
+
+
+class DataParallelModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.block1 = nn.Linear(10, 20)
+        self.block2 = nn.Linear(20, 20)
+        self.block2 = nn.DataParallel(self.block2)
+        self.block3 = nn.Linear(20, 20)
+    def forward(self, x):
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        return x
 
 
 
@@ -77,16 +97,16 @@ src_pad_idx = ligands.vocab.stoi['<pad>']
 
 
 class Transformer(nn.Module):
-    def __init__(self, embedding_size, src_vocab_size, trg_vocab_size, src_pad_idx, num_heads, num_encoderr_layers, num_decoder_layers, forward_expansion, dropout, max_len, device):
+    def __init__(self, embedding_size, src_vocab_size, trg_vocab_size, src_pad_idx, num_heads, num_encoderr_layers, num_decoder_layers, forward_expansion, p, max_len, device):
         super(Transformer, self).__init__()
         self.src_word_embedding = nn.Embedding(src_vocab_size, embedding_size)
         self.src_position_embedding = nn.Embedding(max_len, embedding_size)
         self.trg_word_embedding = nn.Embedding(trg_vocab_size, embedding_size)
         self.trg_position_embedding = nn.Embedding(max_len, embedding_size)
         self.device = device
-        self.transformer = nn.Transformer(embedding_size, num_heads, num_encoder_layers, num_decoder_layers, forward_expansion, dropout)
+        self.transformer = nn.Transformer(embedding_size, num_heads, num_encoder_layers, num_decoder_layers, forward_expansion, p)
         self.fc_out = nn.Linear(embedding_size, trg_vocab_size)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(p)
         self.src_pad_idx = src_pad_idx
     def make_src_mask(self, src):
         src_mask = src.transpose(0,1) == self.src_pad_idx
@@ -106,41 +126,54 @@ class Transformer(nn.Module):
 
 
 
-model = Transformer(embedding_size, src_vocab_size, trg_vocab_size, src_pad_idx, num_heads, num_encoder_layers, num_decoder_layers, forward_expansion, dropout, max_len, device).to(device)
+model = Transformer(embedding_size, src_vocab_size, trg_vocab_size, src_pad_idx, num_heads, num_encoder_layers, num_decoder_layers, forward_expansion, p, max_len, device).to(device)
+
+if MULTI_GPU == True:
+    if torch.cuda.device_count() > 1:
+                  print("Let's use", torch.cuda.device_count(), "GPUs!")
+                  model = nn.DataParallel(model)
+
 
 criterion = nn.CrossEntropyLoss(ignore_index=src_pad_idx)
 
-optimizer = optim.Adam(model.parameters(), lr=LR)
+#optimizer = optim.Adam(model.parameters(), lr=LR)
+optimizer = optim.SGD(model.parameters(), lr=LR)
 
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=10, verbose=True)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+#scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
 
 if LOAD_MODEL:
     load_checkpoint(torch.load(MODEL_PATH), model, optimizer)
 
 
 
+model.train()
+
 for epoch in range(N_EPOCHS):
-    print(f'Epoch [{epoch} / {N_EPOCHS}]')
-    model.train()
+    # print(f'Epoch [{epoch} / {N_EPOCHS}]')
     losses = []
     for batch_idx, batch in enumerate(train_iterator):
         inp_data = batch.src.to(device)
         #input shape: (maxlen(in-seqs), BS)
         target = batch.trg.to(device)
         #target shape: (maxlen(targ-seqs), BS)
-        output = model(inp_data, target)
+        optimizer.zero_grad()
+        output = model(inp_data, target[:-1])
         # output shape: (maxlen(trg-seqs), BS, len(targ_vocab))
-        output = output[1:].reshape(-1, output.shape[2]) #skip start pad
+        output = output.reshape(-1, output.shape[2])
         #output shape: (len(seq)-1*BS, len(targ_vocab))
         target = target[1:].reshape(-1)
-        optimizer.zero_grad()
         loss = criterion(output, target)
         losses.append(loss.detach().item())
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=.5)
         optimizer.step()
+        wandb.log({'Training loss': loss}, step=epoch)
+        # print(output)
+        # print(target)
+        # print(loss)
     mean_loss = sum(losses)/len(losses)
-    scheduler.step(mean_loss)
+    scheduler.step()
     print(f'Loss[{mean_loss}]')
     if SAVE_MODEL and epoch == N_EPOCHS-1:
         checkpoint = {'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict()}
@@ -148,22 +181,23 @@ for epoch in range(N_EPOCHS):
 
 
 
-#
-# model.eval()
-#
-# sentence = 'MNNFILLEEQLIKKSQQKRRTSPSNFKVRFFVLTKASLAYFEDRHGKKRTLKGSIELSRIKCVEIVKSDISIPCHYKYPFQVVHDNYLLYVFAPDRESRQRWVLALKEETRNNNSLVPKYHPNFWMDGKWRCCSQLEKLATGCAQYDPTKNASKKPLPPTPEDNRRPLWEPEETVVIALYDYQTNDPQELALRRNEEYCLLDSSEIHWWRVQDRNGHEGYVPSSYLVEKSPNNLETYEWYNKSISRDKAEKLLLDTGKEGAFMVRDSRTAGTYTVSVFTKAVVSENNPCIKHYHIKETNDNPKRYYVAEKYVFDSIPLLINYHQHNGGGLVTRLRYPVCFGRQKAPVTAGLRYGKWVIDPSELTFVQEIGSGQFGLVHLGYWLNKDKVAIKTIREGAMSEEDFIEEAEVMMKLSHPKLVQLYGVCLEQAPICLVFEFMEHGCLSDYLRTQRGLFAAETLLGMCLDVCEGMAYLEEACVIHRDLAARNCLVGENQVIKVSDFGMTRFVLDDQYTSSTGTKFPVKWASPEVFSFSRYSSKSDVWSFGVLMWEVFSEGKIPYENRSNSEVVEDISTGFRLYKPRLASTHVYQIMNHCWKERPEDRPAFSRLLRQLAEIAESGL'
-# actual = 'COc1cc(C)c(cc1C(=O)N1CCN(CC1)C(=O)C)Sc1cnc(s1)NC(=O)c1ccc(cc1)CNC(C(C)'
-#
-# translated = translate_sentence(model, sentence, receptors, ligands, device, max_length = 1000)
-# translated = [chr(i+32) for i in translated]
-# translated = ''.join(translated)
-# print(f'Ligand prediction {translated} \n')
-# print(f'Actual ligand {actual}')
-#
+
+model.eval()
+
+sentence = 'MNNFILLEEQLIKKSQQKRRTSPSNFKVRFFVLTKASLAYFEDRHGKKRTLKGSIELSRIKCVEIVKSDISIPCHYKYPFQVVHDNYLLYVFAPDRESRQRWVLALKEETRNNNSLVPKYHPNFWMDGKWRCCSQLEKLATGCAQYDPTKNASKKPLPPTPEDNRRPLWEPEETVVIALYDYQTNDPQELALRRNEEYCLLDSSEIHWWRVQDRNGHEGYVPSSYLVEKSPNNLETYEWYNKSISRDKAEKLLLDTGKEGAFMVRDSRTAGTYTVSVFTKAVVSENNPCIKHYHIKETNDNPKRYYVAEKYVFDSIPLLINYHQHNGGGLVTRLRYPVCFGRQKAPVTAGLRYGKWVIDPSELTFVQEIGSGQFGLVHLGYWLNKDKVAIKTIREGAMSEEDFIEEAEVMMKLSHPKLVQLYGVCLEQAPICLVFEFMEHGCLSDYLRTQRGLFAAETLLGMCLDVCEGMAYLEEACVIHRDLAARNCLVGENQVIKVSDFGMTRFVLDDQYTSSTGTKFPVKWASPEVFSFSRYSSKSDVWSFGVLMWEVFSEGKIPYENRSNSEVVEDISTGFRLYKPRLASTHVYQIMNHCWKERPEDRPAFSRLLRQLAEIAESGL'
+actual = 'COc1cc(C)c(cc1C(=O)N1CCN(CC1)C(=O)C)Sc1cnc(s1)NC(=O)c1ccc(cc1)CNC(C(C)'
+
+translated = translate_sentence(model, sentence, receptors, ligands, device, max_length = 1000)
+
+translated = [chr(i+32) for i in translated]
+translated = ''.join(translated)
+print(f'Ligand prediction {translated} \n')
+print(f'Actual ligand {actual}')
 
 
-# score = bleu(test_data, model, receptors, ligands, device)
-# print(f"Bleu score {score*100:.2f}")
+
+score = bleu(test_data, model, receptors, ligands, device)
+print(f"Bleu score {score*100:.2f}")
 
 
 

@@ -14,17 +14,14 @@ def translate_sentence(model, sentence, receptors, ligands, device, max_length=5
     # Convert to Tensor
     sentence_tensor = torch.LongTensor(text_to_indices).unsqueeze(1).to(device)
     # Build encoder hidden, cell state
-    with torch.no_grad():
-        hidden, cell = model.encoder(sentence_tensor)
-    outputs = [ligands.vocab.stoi["<sos>"]]
+    outputs = [ligands.vocab.stoi["*"]]
     for _ in range(max_length):
-        previous_word = torch.LongTensor([outputs[-1]]).to(device)
+        trg_tensor = torch.LongTensor(outputs).unsqueeze(1).to(device)
         with torch.no_grad():
-            output, (hidden, cell) = model.decoder(previous_word, hidden, cell)
-            best_guess = output.argmax(1).item()
+            output = model(sentence_tensor, trg_tensor)
+        best_guess = output.argmax(2)[-1,:].item()
         outputs.append(best_guess)
-        # Model predicts it's the end of the sentence
-        if output.argmax(1).item() == ligands.vocab.stoi["<eos>"]:
+        if best_guess == ligands.vocab.stoi["!"]:
             break
     translated_sentence = [ligands.vocab.itos[idx] for idx in outputs]
     # remove start token
@@ -32,10 +29,9 @@ def translate_sentence(model, sentence, receptors, ligands, device, max_length=5
 
 
 
-
-
 # score = bleu(test_data[1:100], model, receptors, ligands, device)
 def bleu(data, model, receptors, ligands, device):
+    print("=> Calculating Bleu")
     targets = []
     outputs = []
     for example in data:
